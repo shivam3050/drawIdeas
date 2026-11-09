@@ -1,7 +1,7 @@
 {
-  "name": "tldraw",
-  "short_name": "tldraw",
-  "description": "tldraw whiteboard (offline)",
+  "name": "Draw Ideas",
+  "short_name": "draw",
+  "description": "Draw Ideas in the phone infinite sheet drawing",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

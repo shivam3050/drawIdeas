@@ -495,22 +495,59 @@ var fileInput=document.createElement("input");
 fileInput.type="file";fileInput.accept=".json,.tldr,application/json";fileInput.style.display="none";
 document.body.appendChild(fileInput);
 function closeMenu(){document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",code:"Escape",keyCode:27,bubbles:true}))}
-function doExport(){
+function blobToDataUrl(b){
+return new Promise(function(res,rej){
+var fr=new FileReader();
+fr.onload=function(){res(fr.result)};
+fr.onerror=function(){rej(fr.error||new Error("Could not read image"))};
+fr.readAsDataURL(b);
+});
+}
+function dataUrlToFile(u,name){
+var i=u.indexOf(","),mime=u.slice(5,i).split(";")[0]||"application/octet-stream";
+var bin=atob(u.slice(i+1)),arr=new Uint8Array(bin.length),k;
+for(k=0;k<bin.length;k++)arr[k]=bin.charCodeAt(k);
+return new File([arr],name||"asset",{type:mime});
+}
+var exporting=false;
+async function doExport(){
+if(exporting)return;
+exporting=true;
 try{
 var snap=LO(editor.store);
+var store=Object.assign({},snap.document.store);
+var embedded=[],missing=[],ids=Object.keys(store),i,r,url,resp,blob,dataUrl;
+for(i=0;i<ids.length;i++){
+r=store[ids[i]];
+if(!r||r.typeName!=="asset"||!r.props||typeof r.props.src!=="string"||r.props.src.indexOf("asset:")!==0)continue;
+try{
+url=await editor.resolveAssetUrl(r.id,{shouldResolveToOriginal:true});
+if(!url)throw new Error("not found");
+resp=await fetch(url);
+if(!resp.ok)throw new Error("fetch failed");
+blob=await resp.blob();
+if(!blob.size)throw new Error("empty");
+dataUrl=await blobToDataUrl(blob);
+store[r.id]=Object.assign({},r,{props:Object.assign({},r.props,{src:dataUrl})});
+embedded.push(r.id);
+}catch(e2){missing.push(r.props.name||r.id)}
+}
+snap={document:{schema:snap.document.schema,store:store},session:snap.session};
 var d=new Date(),p=function(x){return String(x).padStart(2,"0")};
 var name="tldraw-backup-"+d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+".json";
-var blob=new Blob([JSON.stringify({app:"tldraw-offline-backup",version:1,savedAt:d.toISOString(),snapshot:snap})],{type:"application/json"});
-var url=URL.createObjectURL(blob);
-var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();
-setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},1000);
+var blob2=new Blob([JSON.stringify({app:"tldraw-offline-backup",version:2,savedAt:d.toISOString(),embedded:embedded,snapshot:snap})],{type:"application/json"});
+var url2=URL.createObjectURL(blob2);
+var a=document.createElement("a");a.href=url2;a.download=name;document.body.appendChild(a);a.click();
+setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url2)},1000);
+if(missing.length)alert(missing.length+" image(s) could not be read from storage and are NOT in this backup:\n"+missing.slice(0,10).join("\n"));
 }catch(err){alert("Export failed: "+(err&&err.message||err))}
+exporting=false;
 }
 function doOpen(){fileInput.value="";fileInput.click()}
 fileInput.onchange=function(){
 var f=fileInput.files&&fileInput.files[0];if(!f)return;
 var r=new FileReader();
-r.onload=function(){
+r.onload=async function(){
 try{
 var data=JSON.parse(r.result);
 var snap=data&&data.snapshot?data.snapshot:data;
@@ -519,6 +556,17 @@ var st={};snap.records.forEach(function(x){st[x.id]=x});
 snap={store:st,schema:snap.schema}}
 if(!snap||(!snap.document&&!snap.store))throw new Error("Not a valid backup file");
 if(!confirm("Current canvas will be replaced with the backup. Continue?"))return;
+var store=snap.document?snap.document.store:snap.store;
+var embedded=data&&Array.isArray(data.embedded)?data.embedded:[];
+var i,id,rec,file,res;
+for(i=0;i<embedded.length;i++){
+id=embedded[i];rec=store&&store[id];
+if(!rec||!rec.props||typeof rec.props.src!=="string"||rec.props.src.indexOf("data:")!==0)continue;
+file=dataUrlToFile(rec.props.src,rec.props.name);
+res=await editor.store.props.assets.upload(rec,file);
+if(!res||!res.src)throw new Error("Could not restore image "+(rec.props.name||id));
+store[id]=Object.assign({},rec,{props:Object.assign({},rec.props,{src:res.src})});
+}
 xx(editor.store,snap);
 editor.clearHistory();
 editor.zoomToFit({animation:{duration:200}});
